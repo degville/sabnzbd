@@ -126,12 +126,12 @@ class PostProcessor(Thread):
     def save(self):
         """Save postproc queue"""
         logging.info("Saving postproc queue")
-        sabnzbd.save_admin((POSTPROC_QUEUE_VERSION, self.history_queue), POSTPROC_QUEUE_FILE_NAME)
+        sabnzbd.filesystem.save_admin((POSTPROC_QUEUE_VERSION, self.history_queue), POSTPROC_QUEUE_FILE_NAME)
 
     def load(self):
         """Save postproc queue"""
         logging.info("Loading postproc queue")
-        data = sabnzbd.load_admin(POSTPROC_QUEUE_FILE_NAME)
+        data = sabnzbd.filesystem.load_admin(POSTPROC_QUEUE_FILE_NAME)
         if data is None:
             return
         try:
@@ -732,7 +732,7 @@ def parring(nzo: NzbObject, workdir: str):
     re_add = False
 
     # Get verification status of sets
-    verified = sabnzbd.load_data(VERIFIED_FILE, nzo.admin_path, remove=False) or {}
+    verified = sabnzbd.filesystem.load_data(VERIFIED_FILE, nzo.admin_path, remove=False) or {}
 
     # If all were verified successfully, we skip the rest of the checks
     if verified and all(verified.values()):
@@ -800,7 +800,7 @@ def parring(nzo: NzbObject, workdir: str):
         sabnzbd.NzbQueue.add(nzo)
         sabnzbd.Downloader.resume_from_postproc()
 
-    sabnzbd.save_data(verified, VERIFIED_FILE, nzo.admin_path)
+    sabnzbd.filesystem.save_data(verified, VERIFIED_FILE, nzo.admin_path)
 
     logging.info("Verification and repair finished for %s", nzo.final_name)
     return par_error, re_add

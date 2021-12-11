@@ -19,6 +19,7 @@
 sabnzbd.misc - misc classes
 """
 import os
+import ssl
 import sys
 import logging
 import urllib.request
@@ -34,11 +35,12 @@ import ipaddress
 from typing import Union, Tuple, Any, AnyStr, Optional, List
 
 import sabnzbd
-from sabnzbd.constants import DEFAULT_PRIORITY, MEBI, DEF_ARTICLE_CACHE_DEFAULT, DEF_ARTICLE_CACHE_MAX
+import sabnzbd.getipaddress
+from sabnzbd.constants import DEFAULT_PRIORITY, MEBI, DEF_ARTICLE_CACHE_DEFAULT, DEF_ARTICLE_CACHE_MAX, REPAIR_REQUEST
 import sabnzbd.config as config
 import sabnzbd.cfg as cfg
 from sabnzbd.encoding import ubtou, platform_btou
-from sabnzbd.filesystem import userxbit
+from sabnzbd.filesystem import userxbit, make_script_path, remove_file
 
 TAB_UNITS = ("", "K", "M", "G", "T", "P")
 RE_UNITS = re.compile(r"(\d+\.*\d*)\s*([KMGTP]?)", re.I)
@@ -1105,3 +1107,103 @@ def run_command(cmd: List[str], **kwargs):
         txt = platform_btou(p.stdout.read())
         p.wait()
     return txt
+
+
+def run_script(script):
+    """Run a user script (queue complete only)"""
+    script_path = make_script_path(script)
+    if script_path:
+        try:
+            script_output = run_command([script_path])
+            logging.info("Output of queue-complete script %s: \n%s", script, script_output)
+        except:
+            logging.info("Failed queue-complete script %s, Traceback: ", script, exc_info=True)
+
+
+def set_https_verification(value):
+    """Set HTTPS-verification state while returning current setting
+    False = disable verification
+    """
+    prev = ssl._create_default_https_context == ssl.create_default_context
+    if value:
+        ssl._create_default_https_context = ssl.create_default_context
+    else:
+        ssl._create_default_https_context = ssl._create_unverified_context
+    return prev
+
+
+def test_ipv6():
+    """Check if external IPv6 addresses are reachable"""
+    if not cfg.selftest_host():
+        # User disabled the test, assume active IPv6
+        return True
+    try:
+        info = sabnzbd.getipaddress.addresslookup6(cfg.selftest_host())
+    except:
+        logging.debug(
+            "Test IPv6: Disabling IPv6, because it looks like it's not available. Reason: %s", sys.exc_info()[0]
+        )
+        return False
+
+    try:
+        af, socktype, proto, canonname, sa = info[0]
+        with socket.socket(af, socktype, proto) as sock:
+            sock.settimeout(2)  # 2 second timeout
+            sock.connect(sa[0:2])
+        logging.debug("Test IPv6: IPv6 test successful. Enabling IPv6")
+        return True
+    except socket.error:
+        logging.debug("Test IPv6: Cannot reach IPv6 test host. Disabling IPv6")
+        return False
+    except:
+        logging.debug("Test IPv6: Problem during IPv6 connect. Disabling IPv6. Reason: %s", sys.exc_info()[0])
+        return False
+
+
+def test_cert_checking():
+    """Test quality of certificate validation"""
+    # User disabled the test, assume proper SSL certificates
+    if not cfg.selftest_host():
+        return True
+
+    # Try a connection to our test-host
+    try:
+        ctx = ssl.create_default_context()
+        base_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        ssl_sock = ctx.wrap_socket(base_sock, server_hostname=cfg.selftest_host())
+        ssl_sock.settimeout(2.0)
+        ssl_sock.connect((cfg.selftest_host(), 443))
+        ssl_sock.close()
+        return True
+    except (socket.gaierror, socket.timeout):
+        # Non-SSL related error.
+        # We now assume that certificates work instead of forcing
+        # lower quality just because some (temporary) internet problem
+        logging.info("Could not determine system certificate validation quality due to connection problems")
+        return True
+    except:
+        # Seems something is still wrong
+        sabnzbd.set_https_verification(False)
+    return False
+
+
+def request_repair():
+    """Request a full repair on next restart"""
+    path = os.path.join(cfg.admin_dir.get_path(), REPAIR_REQUEST)
+    try:
+        with open(path, "w") as f:
+            f.write("\n")
+    except:
+        pass
+
+
+def check_repair_request():
+    """Return True if repair request found, remove afterwards"""
+    path = os.path.join(cfg.admin_dir.get_path(), REPAIR_REQUEST)
+    if os.path.exists(path):
+        try:
+            remove_file(path)
+        except:
+            pass
+        return True
+    return False

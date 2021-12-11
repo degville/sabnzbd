@@ -547,11 +547,11 @@ class Downloader(Thread):
 
     def run(self):
         # First check IPv6 connectivity
-        sabnzbd.EXTERNAL_IPV6 = sabnzbd.test_ipv6()
+        sabnzbd.EXTERNAL_IPV6 = sabnzbd.misc.test_ipv6()
         logging.debug("External IPv6 test result: %s", sabnzbd.EXTERNAL_IPV6)
 
         # Then we check SSL certificate checking
-        sabnzbd.CERTIFICATE_VALIDATION = sabnzbd.test_cert_checking()
+        sabnzbd.CERTIFICATE_VALIDATION = sabnzbd.misc.test_cert_checking()
         logging.debug("SSL verification test: %s", sabnzbd.CERTIFICATE_VALIDATION)
 
         # Kick BPS-Meter to check quota

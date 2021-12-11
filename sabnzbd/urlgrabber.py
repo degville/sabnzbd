@@ -249,7 +249,9 @@ class URLGrabber(Thread):
 
                 # If no filename, make one
                 if not filename:
-                    filename = sabnzbd.get_new_id("url", os.path.join(cfg.admin_dir.get_path(), FUTURE_Q_FOLDER))
+                    filename = sabnzbd.filesystem.get_new_id(
+                        "url", os.path.join(cfg.admin_dir.get_path(), FUTURE_Q_FOLDER)
+                    )
 
                 # Write data to temp file
                 path = os.path.join(cfg.admin_dir.get_path(), FUTURE_Q_FOLDER, filename)

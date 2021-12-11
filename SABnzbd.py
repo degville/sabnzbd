@@ -690,9 +690,9 @@ def is_sabnzbd_running(url):
     try:
         url = "%s&mode=version" % url
         # Do this without certificate verification, few installations will have that
-        prev = sabnzbd.set_https_verification(False)
+        prev = sabnzbd.misc.set_https_verification(False)
         ver = get_from_url(url)
-        sabnzbd.set_https_verification(prev)
+        sabnzbd.misc.set_https_verification(prev)
         return ver and (re.search(r"\d+\.\d+\.", ver) or ver.strip() == sabnzbd.__version__)
     except:
         return False
@@ -720,10 +720,10 @@ def check_for_sabnzbd(url, upload_nzbs, allow_browser=True):
     if is_sabnzbd_running(url):
         # Upload any specified nzb files to the running instance
         if upload_nzbs:
-            prev = sabnzbd.set_https_verification(False)
+            prev = sabnzbd.misc.set_https_verification(False)
             for f in upload_nzbs:
                 upload_file_to_sabnzbd(url, f)
-            sabnzbd.set_https_verification(prev)
+            sabnzbd.misc.set_https_verification(prev)
         else:
             # Launch the web browser and quit since sabnzbd is already running
             # Trim away everything after the final slash in the URL

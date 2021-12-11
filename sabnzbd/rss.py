@@ -76,7 +76,7 @@ class RSSReader:
         self.shutdown = False
 
         try:
-            self.jobs = sabnzbd.load_admin(RSS_FILE_NAME)
+            self.jobs = sabnzbd.filesystem.load_admin(RSS_FILE_NAME)
             if self.jobs:
                 for feed in self.jobs:
                     remove_obsolete(self.jobs[feed], list(self.jobs[feed]))
@@ -491,7 +491,7 @@ class RSSReader:
 
     @synchronized(RSS_LOCK)
     def save(self):
-        sabnzbd.save_admin(self.jobs, RSS_FILE_NAME)
+        sabnzbd.filesystem.save_admin(self.jobs, RSS_FILE_NAME)
 
     @synchronized(RSS_LOCK)
     def delete(self, feed):

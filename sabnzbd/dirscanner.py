@@ -70,7 +70,7 @@ class DirScanner(threading.Thread):
 
         self.newdir()
         try:
-            dirscan_dir, self.ignored, self.suspected = sabnzbd.load_admin(SCAN_FILE_NAME)
+            dirscan_dir, self.ignored, self.suspected = sabnzbd.filesystem.load_admin(SCAN_FILE_NAME)
             if dirscan_dir != self.dirscan_dir:
                 self.ignored = {}
                 self.suspected = {}
@@ -110,7 +110,7 @@ class DirScanner(threading.Thread):
 
     def save(self):
         """Save dir scanner bookkeeping"""
-        sabnzbd.save_admin((self.dirscan_dir, self.ignored, self.suspected), SCAN_FILE_NAME)
+        sabnzbd.filesystem.save_admin((self.dirscan_dir, self.ignored, self.suspected), SCAN_FILE_NAME)
 
     def run(self):
         """Start the scanner"""

@@ -18,11 +18,8 @@
 import os
 import logging
 import datetime
-import shutil
 import tempfile
-import pickle
 import ctypes.util
-import gzip
 import time
 import socket
 import socks
@@ -30,14 +27,14 @@ import cherrypy
 import cherrypy._cpreqbody
 import platform
 import sys
-import ssl
 import urllib.parse
 from threading import Lock, Thread, Condition
-from typing import Any, AnyStr, Optional, Union
+from typing import Optional, Union
 
 ##############################################################################
 # Determine platform flags
 ##############################################################################
+
 WIN32 = DARWIN = FOUNDATION = WIN64 = DOCKER = False
 KERNEL32 = LIBC = MACOSLIBC = None
 
@@ -243,7 +240,7 @@ def initialize(pause_downloader=False, clean_up=False, repair=0):
 
     # Optionally wait for "incomplete" to become online
     if cfg.wait_for_dfolder():
-        wait_for_download_folder()
+        filesystem.wait_for_download_folder()
     else:
         cfg.download_dir.set(cfg.download_dir(), create=True)
     cfg.download_dir.set_create(True)
@@ -280,7 +277,7 @@ def initialize(pause_downloader=False, clean_up=False, repair=0):
     cfg.enable_https_verification.callback(guard_https_ver)
     guard_https_ver()
 
-    check_incomplete_vs_complete()
+    filesystem.check_incomplete_vs_complete()
 
     # Set language files
     lang.set_locale_info("SABnzbd", DIR_LANGUAGE)
@@ -301,7 +298,7 @@ def initialize(pause_downloader=False, clean_up=False, repair=0):
         cfg.host_whitelist.set(socket.gethostname())
 
     # Do repair if requested
-    if check_repair_request():
+    if misc.check_repair_request():
         repair = 2
         pause_downloader = True
 
@@ -518,21 +515,9 @@ def guard_language():
     sabnzbd.api.clear_trans_cache()
 
 
-def set_https_verification(value):
-    """Set HTTPS-verification state while returning current setting
-    False = disable verification
-    """
-    prev = ssl._create_default_https_context == ssl.create_default_context
-    if value:
-        ssl._create_default_https_context = ssl.create_default_context
-    else:
-        ssl._create_default_https_context = ssl._create_unverified_context
-    return prev
-
-
 def guard_https_ver():
     """Callback for change of https verification"""
-    set_https_verification(cfg.enable_https_verification())
+    misc.set_https_verification(cfg.enable_https_verification())
 
 
 def add_url(url, pp=None, script=None, cat=None, priority=None, nzbname=None, password=None):
@@ -588,46 +573,6 @@ def unpause_all():
     sabnzbd.PAUSED_ALL = False
     sabnzbd.Downloader.resume()
     logging.debug("PAUSED_ALL inactive")
-
-
-##############################################################################
-# NZB Saving Methods
-##############################################################################
-
-
-def backup_exists(filename: str) -> bool:
-    """Return True if backup exists and no_dupes is set"""
-    path = cfg.nzb_backup_dir.get_path()
-    return path and os.path.exists(os.path.join(path, filename + ".gz"))
-
-
-def backup_nzb(nzb_path: str):
-    """Backup NZB file, return path to nzb if it was saved"""
-    nzb_backup_dir = cfg.nzb_backup_dir.get_path()
-    if nzb_backup_dir:
-        logging.debug("Saving copy of %s in %s", filesystem.get_filename(nzb_path), nzb_backup_dir)
-        shutil.copy(nzb_path, nzb_backup_dir)
-
-
-def save_compressed(folder: str, filename: str, data: AnyStr) -> str:
-    """Save compressed NZB file in folder, return path to saved nzb file"""
-    if filename.endswith(".nzb"):
-        filename += ".gz"
-    else:
-        filename += ".nzb.gz"
-    full_nzb_path = os.path.join(folder, filename)
-    logging.info("Saving %s", full_nzb_path)
-    try:
-        # Have to get around the path being put inside the tgz
-        with open(full_nzb_path, "wb") as tgz_file:
-            # We only need minimal compression to prevent huge files
-            with gzip.GzipFile(filename, mode="wb", compresslevel=1, fileobj=tgz_file) as gzip_file:
-                gzip_file.write(encoding.utob(data))
-    except:
-        logging.error(T("Saving %s failed"), full_nzb_path)
-        logging.info("Traceback: ", exc_info=True)
-
-    return full_nzb_path
 
 
 ##############################################################################
@@ -807,7 +752,7 @@ def change_queue_complete_action(action, new=True):
     _argument = None
     if action.startswith("script_") and filesystem.is_valid_script(action.replace("script_", "", 1)):
         # all scripts are labeled script_xxx
-        _action = run_script
+        _action = misc.run_script
         _argument = action.replace("script_", "", 1)
     elif new or cfg.queue_complete_pers():
         if action == "shutdown_pc":
@@ -832,17 +777,6 @@ def change_queue_complete_action(action, new=True):
     sabnzbd.QUEUECOMPLETEARG = _argument
 
 
-def run_script(script):
-    """Run a user script (queue complete only)"""
-    script_path = filesystem.make_script_path(script)
-    if script_path:
-        try:
-            script_output = misc.run_command([script_path])
-            logging.info("Output of queue-complete script %s: \n%s", script, script_output)
-        except:
-            logging.info("Failed queue-complete script %s, Traceback: ", script, exc_info=True)
-
-
 def keep_awake():
     """If we still have work to do, keep Windows/macOS system awake"""
     if KERNEL32 or FOUNDATION:
@@ -863,135 +797,6 @@ def keep_awake():
                     KERNEL32.SetThreadExecutionState(ES_CONTINUOUS)
                 else:
                     sleepless.allow_sleep()
-
-
-################################################################################
-# Data IO                                                                      #
-################################################################################
-
-
-def get_new_id(prefix, folder, check_list=None):
-    """Return unique prefixed admin identifier within folder
-    optionally making sure that id is not in the check_list.
-    """
-    for n in range(100):
-        try:
-            if not os.path.exists(folder):
-                os.makedirs(folder)
-            fd, path = tempfile.mkstemp("", "SABnzbd_%s_" % prefix, folder)
-            os.close(fd)
-            head, tail = os.path.split(path)
-            if not check_list or tail not in check_list:
-                return tail
-        except:
-            logging.error(T("Failure in tempfile.mkstemp"))
-            logging.info("Traceback: ", exc_info=True)
-            break
-    # Cannot create unique id, crash the process
-    raise IOError
-
-
-def save_data(data, _id, path, do_pickle=True, silent=False):
-    """Save data to a diskfile"""
-    if not silent:
-        logging.debug("[%s] Saving data for %s in %s", misc.caller_name(), _id, path)
-    path = os.path.join(path, _id)
-
-    # We try 3 times, to avoid any dict or access problems
-    for t in range(3):
-        try:
-            with open(path, "wb") as data_file:
-                if do_pickle:
-                    pickle.dump(data, data_file, protocol=pickle.HIGHEST_PROTOCOL)
-                else:
-                    data_file.write(data)
-            break
-        except:
-            if silent:
-                # This can happen, probably a removed folder
-                pass
-            elif t == 2:
-                logging.error(T("Saving %s failed"), path)
-                logging.info("Traceback: ", exc_info=True)
-            else:
-                # Wait a tiny bit before trying again
-                time.sleep(0.1)
-
-
-def load_data(data_id, path, remove=True, do_pickle=True, silent=False):
-    """Read data from disk file"""
-    path = os.path.join(path, data_id)
-
-    if not os.path.exists(path):
-        logging.info("[%s] %s missing", misc.caller_name(), path)
-        return None
-
-    if not silent:
-        logging.debug("[%s] Loading data for %s from %s", misc.caller_name(), data_id, path)
-
-    try:
-        with open(path, "rb") as data_file:
-            if do_pickle:
-                try:
-                    data = pickle.load(data_file, encoding=sabnzbd.encoding.CODEPAGE)
-                except UnicodeDecodeError:
-                    # Could be Python 2 data that we can load using old encoding
-                    data = pickle.load(data_file, encoding="latin1")
-            else:
-                data = data_file.read()
-
-        if remove:
-            filesystem.remove_file(path)
-    except:
-        logging.error(T("Loading %s failed"), path)
-        logging.info("Traceback: ", exc_info=True)
-        return None
-
-    return data
-
-
-def remove_data(_id: str, path: str):
-    """Remove admin file"""
-    path = os.path.join(path, _id)
-    try:
-        if os.path.exists(path):
-            filesystem.remove_file(path)
-    except:
-        logging.debug("Failed to remove %s", path)
-
-
-def save_admin(data: Any, data_id: str):
-    """Save data in admin folder in specified format"""
-    logging.debug("[%s] Saving data for %s", misc.caller_name(), data_id)
-    save_data(data, data_id, cfg.admin_dir.get_path())
-
-
-def load_admin(data_id: str, remove=False, silent=False) -> Any:
-    """Read data in admin folder in specified format"""
-    logging.debug("[%s] Loading data for %s", misc.caller_name(), data_id)
-    return load_data(data_id, cfg.admin_dir.get_path(), remove=remove, silent=silent)
-
-
-def request_repair():
-    """Request a full repair on next restart"""
-    path = os.path.join(cfg.admin_dir.get_path(), REPAIR_REQUEST)
-    try:
-        with open(path, "w") as f:
-            f.write("\n")
-    except:
-        pass
-
-
-def check_repair_request():
-    """Return True if repair request found, remove afterwards"""
-    path = os.path.join(cfg.admin_dir.get_path(), REPAIR_REQUEST)
-    if os.path.exists(path):
-        try:
-            filesystem.remove_file(path)
-        except:
-            pass
-        return True
-    return False
 
 
 def check_all_tasks():
@@ -1064,27 +869,6 @@ def pid_file(pid_path=None, pid_file=None, port=0):
             logging.warning(T("Cannot access PID file %s"), sabnzbd.DIR_PID)
 
 
-def check_incomplete_vs_complete():
-    """Make sure download_dir and complete_dir are not identical
-    or that download_dir is not a subfolder of complete_dir"""
-    complete = cfg.complete_dir.get_path()
-    if filesystem.same_file(cfg.download_dir.get_path(), complete):
-        if filesystem.real_path("X", cfg.download_dir()) == filesystem.long_path(cfg.download_dir()):
-            # Abs path, so set download_dir as an abs path inside the complete_dir
-            cfg.download_dir.set(os.path.join(complete, "incomplete"))
-        else:
-            cfg.download_dir.set("incomplete")
-        return False
-    return True
-
-
-def wait_for_download_folder():
-    """Wait for download folder to become available"""
-    while not cfg.download_dir.test_path():
-        logging.debug('Waiting for "incomplete" folder')
-        time.sleep(2.0)
-
-
 def set_socks5_proxy():
     if cfg.socks5_proxy_url():
         proxy = urllib.parse.urlparse(cfg.socks5_proxy_url())
@@ -1098,61 +882,6 @@ def set_socks5_proxy():
             proxy.password,
         )
         socket.socket = socks.socksocket
-
-
-def test_ipv6():
-    """Check if external IPv6 addresses are reachable"""
-    if not cfg.selftest_host():
-        # User disabled the test, assume active IPv6
-        return True
-    try:
-        info = sabnzbd.getipaddress.addresslookup6(cfg.selftest_host())
-    except:
-        logging.debug(
-            "Test IPv6: Disabling IPv6, because it looks like it's not available. Reason: %s", sys.exc_info()[0]
-        )
-        return False
-
-    try:
-        af, socktype, proto, canonname, sa = info[0]
-        with socket.socket(af, socktype, proto) as sock:
-            sock.settimeout(2)  # 2 second timeout
-            sock.connect(sa[0:2])
-        logging.debug("Test IPv6: IPv6 test successful. Enabling IPv6")
-        return True
-    except socket.error:
-        logging.debug("Test IPv6: Cannot reach IPv6 test host. Disabling IPv6")
-        return False
-    except:
-        logging.debug("Test IPv6: Problem during IPv6 connect. Disabling IPv6. Reason: %s", sys.exc_info()[0])
-        return False
-
-
-def test_cert_checking():
-    """Test quality of certificate validation"""
-    # User disabled the test, assume proper SSL certificates
-    if not cfg.selftest_host():
-        return True
-
-    # Try a connection to our test-host
-    try:
-        ctx = ssl.create_default_context()
-        base_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        ssl_sock = ctx.wrap_socket(base_sock, server_hostname=cfg.selftest_host())
-        ssl_sock.settimeout(2.0)
-        ssl_sock.connect((cfg.selftest_host(), 443))
-        ssl_sock.close()
-        return True
-    except (socket.gaierror, socket.timeout):
-        # Non-SSL related error.
-        # We now assume that certificates work instead of forcing
-        # lower quality just because some (temporary) internet problem
-        logging.info("Could not determine system certificate validation quality due to connection problems")
-        return True
-    except:
-        # Seems something is still wrong
-        sabnzbd.set_https_verification(False)
-    return False
 
 
 def history_updated():

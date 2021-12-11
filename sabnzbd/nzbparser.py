@@ -152,7 +152,7 @@ def nzbfile_parser(full_nzb_path: str, nzo):
                 else:
                     logging.info("Error importing %s, skipping", file_name)
                     if nzf.nzf_id:
-                        sabnzbd.remove_data(nzf.nzf_id, nzo.admin_path)
+                        sabnzbd.filesystem.remove_data(nzf.nzf_id, nzo.admin_path)
                     skipped_files += 1
                 element.clear()
 
